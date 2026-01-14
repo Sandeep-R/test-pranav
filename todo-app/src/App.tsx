@@ -14,7 +14,7 @@ import {
 import { cn } from '@/lib/utils'
 import { AuthProvider, useAuth } from './contexts/AuthContext'
 import { AuthModal } from './components/auth/AuthModal'
-import { supabase } from './lib/supabase'
+import { supabase, hasSupabaseConfig } from './lib/supabase'
 import type { Todo as TodoType } from './types/database'
 
 type TodoStatus = 'todo' | 'in-progress' | 'done'
@@ -421,6 +421,33 @@ function App() {
 
 function AppContent() {
   const { user, loading } = useAuth()
+
+  if (!hasSupabaseConfig) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center p-4">
+        <Card className="max-w-md w-full">
+          <CardHeader>
+            <CardTitle className="text-destructive">Configuration Error</CardTitle>
+            <CardDescription>
+              Supabase environment variables are not configured.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <p className="text-sm text-muted-foreground mb-4">
+              Please set the following environment variables in your deployment platform:
+            </p>
+            <ul className="list-disc list-inside text-sm text-muted-foreground space-y-2 mb-4">
+              <li><code className="bg-secondary px-2 py-1 rounded">VITE_SUPABASE_URL</code></li>
+              <li><code className="bg-secondary px-2 py-1 rounded">VITE_SUPABASE_ANON_KEY</code></li>
+            </ul>
+            <p className="text-xs text-muted-foreground">
+              Get these values from your Supabase project settings → API
+            </p>
+          </CardContent>
+        </Card>
+      </div>
+    )
+  }
 
   if (loading) {
     return (
