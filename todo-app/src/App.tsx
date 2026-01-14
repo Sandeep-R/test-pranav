@@ -4,18 +4,35 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { cn } from '@/lib/utils'
+
+type TodoStatus = 'todo' | 'in-progress' | 'done'
 
 interface Todo {
   id: string
   text: string
   completed: boolean
+  status: TodoStatus
   createdAt: Date
 }
+
+const statusOptions: { value: TodoStatus; label: string; color: string }[] = [
+  { value: 'todo', label: 'To Do', color: 'bg-gray-500' },
+  { value: 'in-progress', label: 'In Progress', color: 'bg-blue-500' },
+  { value: 'done', label: 'Done', color: 'bg-green-500' },
+]
 
 function App() {
   const [todos, setTodos] = useState<Todo[]>([])
   const [newTodo, setNewTodo] = useState('')
+  const [newTodoStatus, setNewTodoStatus] = useState<TodoStatus>('todo')
 
   const addTodo = () => {
     if (newTodo.trim() === '') return
@@ -24,16 +41,24 @@ function App() {
       id: crypto.randomUUID(),
       text: newTodo.trim(),
       completed: false,
+      status: newTodoStatus,
       createdAt: new Date()
     }
     
     setTodos([todo, ...todos])
     setNewTodo('')
+    setNewTodoStatus('todo')
   }
 
   const toggleTodo = (id: string) => {
     setTodos(todos.map(todo =>
       todo.id === id ? { ...todo, completed: !todo.completed } : todo
+    ))
+  }
+
+  const updateTodoStatus = (id: string, status: TodoStatus) => {
+    setTodos(todos.map(todo =>
+      todo.id === id ? { ...todo, status } : todo
     ))
   }
 
@@ -49,6 +74,14 @@ function App() {
 
   const completedCount = todos.filter(t => t.completed).length
   const totalCount = todos.length
+
+  const getStatusColor = (status: TodoStatus) => {
+    return statusOptions.find(opt => opt.value === status)?.color || 'bg-gray-500'
+  }
+
+  const getStatusLabel = (status: TodoStatus) => {
+    return statusOptions.find(opt => opt.value === status)?.label || status
+  }
 
   return (
     <div className="min-h-screen bg-background">
@@ -106,6 +139,24 @@ function App() {
                 onKeyPress={handleKeyPress}
                 className="flex-1"
               />
+              <Select value={newTodoStatus} onValueChange={(value) => setNewTodoStatus(value as TodoStatus)}>
+                <SelectTrigger className="w-[140px]">
+                  <div className="flex items-center gap-2">
+                    <div className={cn("w-2 h-2 rounded-full", getStatusColor(newTodoStatus))} />
+                    <SelectValue>{getStatusLabel(newTodoStatus)}</SelectValue>
+                  </div>
+                </SelectTrigger>
+                <SelectContent>
+                  {statusOptions.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      <div className="flex items-center gap-2">
+                        <div className={cn("w-2 h-2 rounded-full", option.color)} />
+                        {option.label}
+                      </div>
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
               <Button onClick={addTodo} disabled={!newTodo.trim()}>
                 <Plus className="w-4 h-4" />
                 Add
@@ -143,6 +194,28 @@ function App() {
                     >
                       {todo.text}
                     </span>
+
+                    <Select 
+                      value={todo.status} 
+                      onValueChange={(value) => updateTodoStatus(todo.id, value as TodoStatus)}
+                    >
+                      <SelectTrigger className="w-[140px]">
+                        <div className="flex items-center gap-2">
+                          <div className={cn("w-2 h-2 rounded-full", getStatusColor(todo.status))} />
+                          <SelectValue>{getStatusLabel(todo.status)}</SelectValue>
+                        </div>
+                      </SelectTrigger>
+                      <SelectContent>
+                        {statusOptions.map((option) => (
+                          <SelectItem key={option.value} value={option.value}>
+                            <div className="flex items-center gap-2">
+                              <div className={cn("w-2 h-2 rounded-full", option.color)} />
+                              {option.label}
+                            </div>
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
 
                     <Button
                       variant="ghost"
