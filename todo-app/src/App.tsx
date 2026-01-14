@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { Plus, Trash2, ListTodo } from 'lucide-react'
+import { useState, useEffect } from 'react'
+import { Plus, Trash2, ListTodo, LogOut } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -12,16 +12,12 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { cn } from '@/lib/utils'
+import { AuthProvider, useAuth } from './contexts/AuthContext'
+import { AuthModal } from './components/auth/AuthModal'
+import { supabase } from './lib/supabase'
+import type { Todo as TodoType } from './types/database'
 
 type TodoStatus = 'todo' | 'in-progress' | 'done'
-
-interface Todo {
-  id: string
-  text: string
-  completed: boolean
-  status: TodoStatus
-  createdAt: Date
-}
 
 const statusOptions: { value: TodoStatus; label: string; color: string }[] = [
   { value: 'todo', label: 'To Do', color: 'bg-gray-500' },
@@ -29,41 +25,181 @@ const statusOptions: { value: TodoStatus; label: string; color: string }[] = [
   { value: 'done', label: 'Done', color: 'bg-green-500' },
 ]
 
-function App() {
-  const [todos, setTodos] = useState<Todo[]>([])
+function TodoApp() {
+  const { user, signOut } = useAuth()
+  const [todos, setTodos] = useState<TodoType[]>([])
   const [newTodo, setNewTodo] = useState('')
   const [newTodoStatus, setNewTodoStatus] = useState<TodoStatus>('todo')
+  const [loading, setLoading] = useState(true)
 
-  const addTodo = () => {
-    if (newTodo.trim() === '') return
-    
-    const todo: Todo = {
-      id: crypto.randomUUID(),
-      text: newTodo.trim(),
-      completed: false,
-      status: newTodoStatus,
-      createdAt: new Date()
+  // Fetch todos from Supabase
+  useEffect(() => {
+    if (!user) return
+
+    const fetchTodos = async () => {
+      const { data, error } = await supabase
+        .from('todos')
+        .select('*')
+        .order('created_at', { ascending: false })
+
+      if (error) {
+        console.error('Error fetching todos:', error)
+      } else {
+        setTodos(data || [])
+      }
+      setLoading(false)
     }
-    
-    setTodos([todo, ...todos])
-    setNewTodo('')
-    setNewTodoStatus('todo')
+
+    fetchTodos()
+
+    // Subscribe to real-time updates
+    const channel = supabase
+      .channel('todos-changes')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'todos',
+          filter: `user_id=eq.${user.id}`,
+        },
+        (payload) => {
+          if (payload.eventType === 'INSERT') {
+            setTodos((current) => {
+              // Check if todo already exists (from optimistic update)
+              const exists = current.some((todo) => todo.id === payload.new.id)
+              if (exists) return current
+              return [payload.new as TodoType, ...current]
+            })
+          } else if (payload.eventType === 'UPDATE') {
+            setTodos((current) =>
+              current.map((todo) =>
+                todo.id === payload.new.id ? (payload.new as TodoType) : todo
+              )
+            )
+          } else if (payload.eventType === 'DELETE') {
+            setTodos((current) =>
+              current.filter((todo) => todo.id !== payload.old.id)
+            )
+          }
+        }
+      )
+      .subscribe()
+
+    return () => {
+      supabase.removeChannel(channel)
+    }
+  }, [user])
+
+  const addTodo = async () => {
+    if (newTodo.trim() === '' || !user) return
+
+    const { data, error } = await supabase
+      .from('todos')
+      .insert({
+        user_id: user.id,
+        text: newTodo.trim(),
+        completed: false,
+        status: newTodoStatus,
+      })
+      .select()
+      .single()
+
+    if (error) {
+      console.error('Error adding todo:', error)
+    } else {
+      // Optimistically add to UI immediately
+      setTodos((current) => [data, ...current])
+      setNewTodo('')
+      setNewTodoStatus('todo')
+    }
   }
 
-  const toggleTodo = (id: string) => {
-    setTodos(todos.map(todo =>
-      todo.id === id ? { ...todo, completed: !todo.completed } : todo
-    ))
+  const toggleTodo = async (id: string, completed: boolean) => {
+    // Optimistically update UI
+    setTodos((current) =>
+      current.map((todo) =>
+        todo.id === id ? { ...todo, completed: !completed } : todo
+      )
+    )
+
+    const { error } = await supabase
+      .from('todos')
+      .update({ completed: !completed })
+      .eq('id', id)
+
+    if (error) {
+      console.error('Error toggling todo:', error)
+      // Revert on error
+      setTodos((current) =>
+        current.map((todo) =>
+          todo.id === id ? { ...todo, completed } : todo
+        )
+      )
+    }
   }
 
-  const updateTodoStatus = (id: string, status: TodoStatus) => {
-    setTodos(todos.map(todo =>
-      todo.id === id ? { ...todo, status } : todo
-    ))
+  const updateTodoStatus = async (id: string, status: TodoStatus) => {
+    // Store old status for rollback
+    const oldStatus = todos.find((t) => t.id === id)?.status
+
+    // Optimistically update UI
+    setTodos((current) =>
+      current.map((todo) =>
+        todo.id === id ? { ...todo, status } : todo
+      )
+    )
+
+    const { error } = await supabase
+      .from('todos')
+      .update({ status })
+      .eq('id', id)
+
+    if (error) {
+      console.error('Error updating todo status:', error)
+      // Revert on error
+      if (oldStatus) {
+        setTodos((current) =>
+          current.map((todo) =>
+            todo.id === id ? { ...todo, status: oldStatus } : todo
+          )
+        )
+      }
+    }
   }
 
-  const deleteTodo = (id: string) => {
-    setTodos(todos.filter(todo => todo.id !== id))
+  const deleteTodo = async (id: string) => {
+    // Store for rollback
+    const deletedTodo = todos.find((t) => t.id === id)
+
+    // Optimistically remove from UI
+    setTodos((current) => current.filter((todo) => todo.id !== id))
+
+    const { error } = await supabase.from('todos').delete().eq('id', id)
+
+    if (error) {
+      console.error('Error deleting todo:', error)
+      // Revert on error
+      if (deletedTodo) {
+        setTodos((current) => [deletedTodo, ...current])
+      }
+    }
+  }
+
+  const clearCompleted = async () => {
+    const completedTodos = todos.filter((t) => t.completed)
+    const completedIds = completedTodos.map((t) => t.id)
+
+    // Optimistically remove from UI
+    setTodos((current) => current.filter((t) => !t.completed))
+
+    const { error } = await supabase.from('todos').delete().in('id', completedIds)
+
+    if (error) {
+      console.error('Error clearing completed todos:', error)
+      // Revert on error
+      setTodos((current) => [...completedTodos, ...current])
+    }
   }
 
   const handleKeyPress = (e: React.KeyboardEvent) => {
@@ -72,15 +208,23 @@ function App() {
     }
   }
 
-  const completedCount = todos.filter(t => t.completed).length
+  const completedCount = todos.filter((t) => t.completed).length
   const totalCount = todos.length
 
   const getStatusColor = (status: TodoStatus) => {
-    return statusOptions.find(opt => opt.value === status)?.color || 'bg-gray-500'
+    return statusOptions.find((opt) => opt.value === status)?.color || 'bg-gray-500'
   }
 
   const getStatusLabel = (status: TodoStatus) => {
-    return statusOptions.find(opt => opt.value === status)?.label || status
+    return statusOptions.find((opt) => opt.value === status)?.label || status
+  }
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <p className="text-muted-foreground">Loading...</p>
+      </div>
+    )
   }
 
   return (
@@ -99,6 +243,17 @@ function App() {
           <p className="text-muted-foreground">
             Stay organized and get things done
           </p>
+          <div className="mt-4">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={signOut}
+              className="gap-2"
+            >
+              <LogOut className="w-4 h-4" />
+              Log Out
+            </Button>
+          </div>
         </div>
 
         {/* Main Card */}
@@ -182,7 +337,7 @@ function App() {
                   >
                     <Checkbox
                       checked={todo.completed}
-                      onCheckedChange={() => toggleTodo(todo.id)}
+                      onCheckedChange={() => toggleTodo(todo.id, todo.completed)}
                       className="shrink-0"
                     />
                     
@@ -236,7 +391,7 @@ function App() {
                 <Button
                   variant="ghost"
                   size="sm"
-                  onClick={() => setTodos(todos.filter(t => !t.completed))}
+                  onClick={clearCompleted}
                   className="text-muted-foreground hover:text-destructive"
                 >
                   <Trash2 className="w-4 h-4 mr-2" />
@@ -254,6 +409,32 @@ function App() {
       </div>
     </div>
   )
+}
+
+function App() {
+  return (
+    <AuthProvider>
+      <AppContent />
+    </AuthProvider>
+  )
+}
+
+function AppContent() {
+  const { user, loading } = useAuth()
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <p className="text-muted-foreground">Loading...</p>
+      </div>
+    )
+  }
+
+  if (!user) {
+    return <AuthModal />
+  }
+
+  return <TodoApp />
 }
 
 export default App
